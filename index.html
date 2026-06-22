@@ -1,0 +1,1761 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>3つのまちがいを探せ！ 差し替え対応版</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      margin: 0;
+      background: linear-gradient(#fff1f7, #e8f7ff);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      min-height: 100svh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      overflow: hidden;
+    }
+
+    #wrap {
+      width: min(100vw, 430px);
+      height: 100svh;
+      padding: 8px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+
+    canvas {
+      width: 100%;
+      max-height: 100%;
+      aspect-ratio: 390 / 760;
+      background: #fff;
+      border-radius: 22px;
+      box-shadow: 0 12px 35px rgba(0,0,0,.24);
+      touch-action: none;
+    }
+  </style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game"></canvas>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  /*
+    =========================
+    差し替え方法
+    =========================
+
+    assets フォルダを作り、以下の画像を入れると差し替えできます。
+
+    assets/stage01_a.png
+    assets/stage01_b.png
+    assets/stage02_a.png
+    assets/stage02_b.png
+    ...
+    assets/stage10_a.png
+    assets/stage10_b.png
+
+    推奨画像サイズ：700×440px
+
+    a = 上の絵
+    b = 下の絵
+
+    画像が無い場合は、仮絵が自動表示されます。
+  */
+
+  const IMAGE_MODE = "auto";
+  // "auto"     = assets画像があれば使う。なければ仮絵
+  // "temp"     = 必ず仮絵
+  // "external" = assets画像を優先。失敗したら仮絵
+
+  const DEBUG_ANSWERS = false;
+  // true にすると、正解判定範囲が赤く表示されます。
+
+  const TIME_LIMIT_SEC = 60;
+  // 1問あたりの制限時間。
+  // 45 = 少し難しい
+  // 60 = 標準
+  // 90 = やさしい
+
+  const QUESTIONS_PER_GAME = 3;
+  const ANSWERS_PER_STAGE = 3;
+
+  const GAME_W = 390;
+  const GAME_H = 760;
+
+  const PANEL_X = 20;
+  const PANEL_W = 350;
+  const PANEL_H = 220;
+  const TOP_Y = 130;
+  const BOTTOM_Y = 392;
+
+  const IMG_W = 700;
+  const IMG_H = 440;
+
+  const TAP_MARGIN = 34;
+  // 画像座標上のタップ補助範囲。
+  // 28 = 難しめ
+  // 34 = 標準
+  // 42 = 押しやすい
+
+  const LOAD_TIMEOUT_MS = 600;
+
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+
+  let assetsReady = false;
+  let state = "title";
+  let revealMode = "";
+  let questionOrder = [];
+  let questionIndex = 0;
+  let found = [];
+  let missCount = 0;
+  let startTime = 0;
+  let results = [];
+  let message = "";
+  let messageUntil = 0;
+  let titleImage = null;
+
+  // TitleImage00.png 内の「スタート」ボタン周辺。
+  const buttonStart = { x: 70, y: 465, w: 250, h: 110, text: "ゲームスタート" };
+  const buttonNext = { x: 55, y: 650, w: 280, h: 58, text: "つぎへ" };
+  const buttonReplay = { x: 55, y: 650, w: 280, h: 58, text: "もう一度あそぶ" };
+  const buttonGiveUp = { x: 276, y: 83, w: 94, h: 30, text: "ギブアップ" };
+
+  const STAGES = [
+    {
+      name: "こうえん",
+      imgA: "assets/stage01_a.png",
+      imgB: "assets/stage01_b.png",
+      theme: 0,
+      seed: 101,
+      answers: [
+        { x: 188, y: 43, r: 26, label: "空の鳥", kind: "flower" },
+        { x: 672, y: 177, r: 34, label: "木の鳥小屋", kind: "tile" },
+        { x: 49, y: 299, r: 34, label: "左下の小鳥", kind: "dots" }
+      ]
+    },
+    {
+      name: "湖畔の風景",
+      imgA: "assets/stage02_a.png",
+      imgB: "assets/stage02_b.png",
+      theme: 1,
+      seed: 202,
+  answers: [
+    { x: 140, y: 336, r: 24, label: "柵の上の小鳥" },
+    { x: 149, y: 283, r: 28, label: "ボートのオール" },
+    { x: 551, y: 127, r: 22, label: "煙突の煙" }
+      ]
+    },
+    {
+      name: "田舎の風景",
+      imgA: "assets/stage03_a.png",
+      imgB: "assets/stage03_b.png",
+      theme: 2,
+      seed: 303,
+  answers: [
+    { x: 181, y: 297, r: 22, label: "柵の上の小鳥" },
+    { x: 556, y: 70, r: 28, label: "煙突の煙" },
+    { x: 220, y: 398, r: 28, label: "花" }
+      ]
+    },
+    {
+      name: "キッチン",
+      imgA: "assets/stage04_a.png",
+      imgB: "assets/stage04_b.png",
+      theme: 3,
+      seed: 404,
+  answers: [
+    { x: 104, y: 358, r: 24, label: "左下のちょうちょ" },
+    { x: 345, y: 307, r: 24, label: "橋の上の小鳥" },
+    { x: 582, y: 254, r: 30, label: "家の窓の花壇" }
+      ]
+    },
+    {
+      name: "夜の田舎風景",
+      imgA: "assets/stage05_a.png",
+      imgB: "assets/stage05_b.png",
+      theme: 4,
+      seed: 505,
+  answers: [
+    { x: 74,  y: 350, r: 24, label: "左下の光る虫" },
+    { x: 372, y: 306, r: 28, label: "橋の上の黒猫" },
+    { x: 603, y: 245, r: 30, label: "家の窓の花壇" }
+      ]
+    },
+    {
+      name: "ビル群の夜景",
+      imgA: "assets/stage06_a.png",
+      imgB: "assets/stage06_b.png",
+      theme: 5,
+      seed: 606,
+  answers: [
+    { x: 79,  y: 52,  r: 22, label: "左上の三日月" },
+    { x: 230, y: 304, r: 22, label: "橋の上の赤い車（赤い光）" },
+    { x: 436, y: 378, r: 30, label: "川に浮かぶ白いボート" }
+      ]
+    },
+    {
+      name: "ビル群の夜景2",
+      imgA: "assets/stage07_a.png",
+      imgB: "assets/stage07_b.png",
+      theme: 6,
+      seed: 707,
+answers: [
+  { x: 151, y: 30,  r: 28, label: "左上の三日月" },
+  { x: 548, y: 299, r: 30, label: "橋の上の赤い車" },
+  { x: 582, y: 375, r: 38, label: "右下の白いボート" }
+      ]
+    },
+    {
+      name: "シンプルな夜の運河風景",
+      imgA: "assets/stage08_a.png",
+      imgB: "assets/stage08_b.png",
+      theme: 7,
+      seed: 808,
+answers: [
+  { x: 257, y: 239, r: 30, label: "橋の上の黒猫" },
+  { x: 544, y: 387, r: 38, label: "右下の白いボート" },
+  { x: 626, y: 305, r: 28, label: "青い家の入口前の植木鉢" }
+      ]
+    },
+    {
+      name: "森の散歩道",
+      imgA: "assets/stage09_a.png",
+      imgB: "assets/stage09_b.png",
+      theme: 8,
+      seed: 909,
+  answers: [
+    { x: 103, y: 172, r: 26, label: "木の穴のフクロウ" },
+    { x: 80,  y: 305, r: 24, label: "左下の青いちょうちょ" },
+    { x: 474, y: 254, r: 28, label: "切り株の上のりんご" }
+      ]
+    },
+    {
+      name: "森",
+      imgA: "assets/stage10_a.png",
+      imgB: "assets/stage10_b.png",
+      theme: 9,
+      seed: 1001,
+  answers: [
+    { x: 38,  y: 100, r: 28, label: "左の木の穴のフクロウ" },
+    { x: 35,  y: 382, r: 30, label: "左下の赤いキノコ" },
+    { x: 548, y: 248, r: 34, label: "右側の小鹿" }
+      ]
+    }
+  ];
+
+  setup();
+
+  async function setup() {
+    resizeCanvas();
+    window.addEventListener("resize", resizeCanvas);
+    canvas.addEventListener("pointerdown", onPointerDown);
+
+    await Promise.all([
+      prepareStageImages(),
+      prepareTitleImage()
+    ]);
+    assetsReady = true;
+
+    requestAnimationFrame(loop);
+  }
+
+  function resizeCanvas() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    canvas.width = GAME_W * dpr;
+    canvas.height = GAME_H * dpr;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  async function prepareStageImages() {
+    for (const stage of STAGES) {
+      const tempA = makeTempImage(stage, 0);
+      const tempB = makeTempImage(stage, 1);
+
+      if (IMAGE_MODE === "temp") {
+        stage.imageA = tempA;
+        stage.imageB = tempB;
+        continue;
+      }
+
+      stage.imageA = await loadImageOrFallback(stage.imgA, tempA);
+      stage.imageB = await loadImageOrFallback(stage.imgB, tempB);
+    }
+  }
+
+  async function prepareTitleImage() {
+    titleImage = await loadImageOrFallback("assets/TitleImage00.png", null);
+  }
+
+  function loadImageOrFallback(src, fallback) {
+    return new Promise(resolve => {
+      let done = false;
+      const img = new Image();
+
+      const finish = result => {
+        if (done) return;
+        done = true;
+        resolve(result);
+      };
+
+      img.onload = () => finish(img);
+      img.onerror = () => finish(fallback);
+
+      setTimeout(() => finish(fallback), LOAD_TIMEOUT_MS);
+
+      img.src = src;
+    });
+  }
+
+  function onPointerDown(e) {
+    const p = getPointer(e);
+    if (!assetsReady) return;
+
+    if (state === "title") {
+      if (hitButton(p, buttonStart)) startGame();
+      return;
+    }
+
+    if (state === "playing") {
+      if (hitButton(p, buttonGiveUp)) {
+        giveUp();
+        return;
+      }
+
+      checkAnswer(p.x, p.y);
+      return;
+    }
+
+    if (state === "reveal") {
+      if (hitButton(p, buttonNext)) nextQuestion();
+      return;
+    }
+
+    if (state === "allClear") {
+      if (hitButton(p, buttonReplay)) state = "title";
+    }
+  }
+
+  function getPointer(e) {
+    const rect = canvas.getBoundingClientRect();
+
+    return {
+      x: (e.clientX - rect.left) * GAME_W / rect.width,
+      y: (e.clientY - rect.top) * GAME_H / rect.height
+    };
+  }
+
+  function hitButton(p, b) {
+    return (
+      p.x >= b.x &&
+      p.x <= b.x + b.w &&
+      p.y >= b.y &&
+      p.y <= b.y + b.h
+    );
+  }
+
+  function startGame() {
+    questionOrder = shuffle([...Array(STAGES.length).keys()]).slice(0, QUESTIONS_PER_GAME);
+    questionIndex = 0;
+    found = [];
+    missCount = 0;
+    results = [];
+    revealMode = "";
+    startTime = Date.now();
+    state = "playing";
+    beep(720, 0.07);
+  }
+
+  function nextQuestion() {
+    questionIndex++;
+    found = [];
+    revealMode = "";
+
+    if (questionIndex >= QUESTIONS_PER_GAME) {
+      state = "allClear";
+    } else {
+      startTime = Date.now();
+      state = "playing";
+    }
+
+    beep(720, 0.07);
+  }
+
+  function currentStage() {
+    return STAGES[questionOrder[questionIndex]];
+  }
+
+  function getElapsedSec() {
+    return Math.floor((Date.now() - startTime) / 1000);
+  }
+
+  function getRemainSec() {
+    return Math.max(0, TIME_LIMIT_SEC - getElapsedSec());
+  }
+
+  function updateTimer() {
+    if (state !== "playing") return;
+    if (getRemainSec() <= 0) timeUp();
+  }
+
+  function timeUp() {
+    recordResult("timeout");
+    revealMode = "timeout";
+    state = "reveal";
+    showMessage("時間切れ！答えを表示します");
+    beep(170, 0.16);
+  }
+
+  function giveUp() {
+    recordResult("giveup");
+    revealMode = "giveup";
+    state = "reveal";
+    showMessage("答えを表示します");
+    beep(230, 0.10);
+  }
+
+  function recordResult(status) {
+    const stage = currentStage();
+
+    results.push({
+      stageName: stage.name,
+      status,
+      time: Math.min(getElapsedSec(), TIME_LIMIT_SEC),
+      foundCount: found.length
+    });
+  }
+
+  function checkAnswer(screenX, screenY) {
+    const imgPoint = screenToImagePoint(screenX, screenY);
+
+    if (!imgPoint) {
+      showMessage("絵の中をタップしてね");
+      beep(190, 0.06);
+      return;
+    }
+
+    const stage = currentStage();
+
+    for (let i = 0; i < stage.answers.length; i++) {
+      if (found.includes(i)) continue;
+
+      const a = stage.answers[i];
+      const dx = imgPoint.x - a.x;
+      const dy = imgPoint.y - a.y;
+      const radius = a.r + (a.pad ?? TAP_MARGIN);
+
+      if (dx * dx + dy * dy <= radius * radius) {
+        found.push(i);
+        showMessage(`正解！ ${found.length} / ${ANSWERS_PER_STAGE}`);
+        beep(920, 0.07);
+
+        if (found.length >= ANSWERS_PER_STAGE) {
+          recordResult("clear");
+          revealMode = "clear";
+          state = "reveal";
+          beep(1150, 0.12);
+        }
+
+        return;
+      }
+    }
+
+    missCount++;
+    showMessage("そこじゃないみたい！");
+    beep(230, 0.06);
+  }
+
+  function screenToImagePoint(screenX, screenY) {
+    if (screenX < PANEL_X || screenX > PANEL_X + PANEL_W) return null;
+
+    let localY = null;
+
+    if (screenY >= TOP_Y && screenY <= TOP_Y + PANEL_H) {
+      localY = screenY - TOP_Y;
+    } else if (screenY >= BOTTOM_Y && screenY <= BOTTOM_Y + PANEL_H) {
+      localY = screenY - BOTTOM_Y;
+    } else {
+      return null;
+    }
+
+    const localX = screenX - PANEL_X;
+
+    return {
+      x: localX * IMG_W / PANEL_W,
+      y: localY * IMG_H / PANEL_H
+    };
+  }
+
+  function imageToScreenPoint(imgX, imgY, panelY) {
+    return {
+      x: PANEL_X + imgX * PANEL_W / IMG_W,
+      y: panelY + imgY * PANEL_H / IMG_H
+    };
+  }
+
+  function showMessage(t) {
+    message = t;
+    messageUntil = performance.now() + 1200;
+  }
+
+  function loop() {
+    updateTimer();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function draw() {
+    drawBackground();
+
+    if (!assetsReady) {
+      drawLoading();
+      return;
+    }
+
+    if (state === "title") {
+      drawTitle();
+    } else if (state === "playing" || state === "reveal") {
+      drawGame();
+    } else if (state === "allClear") {
+      drawResult();
+    }
+  }
+
+  function drawBackground() {
+    ctx.clearRect(0, 0, GAME_W, GAME_H);
+
+    const grad = ctx.createLinearGradient(0, 0, 0, GAME_H);
+    grad.addColorStop(0, "#fff8fb");
+    grad.addColorStop(1, "#eef9ff");
+
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, GAME_W, GAME_H);
+
+    for (let i = 0; i < 65; i++) {
+      const x = (i * 73) % GAME_W;
+      const y = (i * 47) % GAME_H;
+      ctx.fillStyle = i % 2 === 0 ? "rgba(255,118,168,.12)" : "rgba(83,183,255,.12)";
+      circle(ctx, x, y, 7 + (i % 4));
+    }
+  }
+
+  function drawLoading() {
+    text("読み込み中...", GAME_W / 2, GAME_H / 2, 24, "#ff5d8f", "bold", "center");
+  }
+
+  function drawTitle() {
+    if (titleImage) {
+      const scale = Math.max(GAME_W / titleImage.width, GAME_H / titleImage.height);
+      const width = titleImage.width * scale;
+      const height = titleImage.height * scale;
+
+      ctx.drawImage(
+        titleImage,
+        (GAME_W - width) / 2,
+        (GAME_H - height) / 2,
+        width,
+        height
+      );
+      return;
+    }
+
+    text("3つの", GAME_W / 2, 110, 34, "#ff5d8f", "bold", "center");
+    text("まちがいを探せ！", GAME_W / 2, 158, 38, "#ff5d8f", "bold", "center");
+
+    text("差し替え対応版", GAME_W / 2, 210, 20, "#444", "bold", "center");
+    text("10種類からランダムで3問出題", GAME_W / 2, 240, 15, "#666", "normal", "center");
+    text(`制限時間：1問 ${TIME_LIMIT_SEC}秒`, GAME_W / 2, 266, 15, "#666", "bold", "center");
+
+    roundRect(ctx, 44, 305, 302, 225, 22, "#fff");
+    strokeRoundRect(ctx, 44, 305, 302, 225, 22, "#ffd1e0", 4);
+
+    drawTitleSample();
+
+    text("時間切れ・ギブアップで", GAME_W / 2, 482, 17, "#444", "bold", "center");
+    text("答えを表示します", GAME_W / 2, 510, 17, "#444", "bold", "center");
+
+    drawButton(buttonStart, "#ff76a8", "#fff");
+
+    text("推奨画像サイズ：700×440px", GAME_W / 2, 725, 13, "#777", "normal", "center");
+  }
+
+  function drawTitleSample() {
+    const x = 74;
+    const y = 330;
+
+    roundRect(ctx, x, y, 242, 128, 14, "#eaf8ff");
+
+    ctx.save();
+    roundedPath(ctx, x, y, 242, 128, 14);
+    ctx.clip();
+
+    ctx.fillStyle = "#8fd96f";
+    ctx.fillRect(x, y + 88, 242, 40);
+
+    ctx.fillStyle = "#ffd75e";
+    circle(ctx, x + 54, y + 45, 20);
+
+    ctx.fillStyle = "#7a5cff";
+    roundRect(ctx, x + 113, y + 72, 74, 26, 8);
+
+    ctx.fillStyle = "#ff5d8f";
+    circle(ctx, x + 210, y + 47, 14);
+
+    ctx.restore();
+
+    ctx.strokeStyle = "#ff315f";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.arc(x + 210, y + 47, 23, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+
+  function drawGame() {
+    const stage = currentStage();
+    const remain = getRemainSec();
+
+    text("3つのまちがいを探せ！", GAME_W / 2, 30, 23, "#ff5d8f", "bold", "center");
+    text(`問題 ${questionIndex + 1} / ${QUESTIONS_PER_GAME}：${stage.name}`, GAME_W / 2, 56, 16, "#444", "bold", "center");
+    text(`発見 ${found.length} / 3　ミス ${missCount}`, 20, 82, 14, "#666", "normal", "left");
+
+    if (state === "playing") {
+      drawSmallButton(buttonGiveUp);
+    }
+
+    drawTimer(remain);
+
+    drawImagePanel(stage.imageA, PANEL_X, TOP_Y, "上の絵");
+    drawImagePanel(stage.imageB, PANEL_X, BOTTOM_Y, "下の絵");
+
+    const revealAll = state === "reveal" && revealMode !== "clear";
+    drawAnswerMarks(stage, revealAll);
+
+    if (DEBUG_ANSWERS) drawDebugAnswers(stage);
+
+    for (let i = 0; i < ANSWERS_PER_STAGE; i++) {
+      ctx.fillStyle = found.includes(i) ? "#ff5d8f" : "#ddd";
+      circle(ctx, GAME_W / 2 - 34 + i * 34, 637, 11);
+    }
+
+    text("よく見くらべてね", GAME_W / 2, 674, 14, "#666", "normal", "center");
+
+    if (performance.now() < messageUntil) {
+      roundRect(ctx, 45, 612, 300, 42, 21, "rgba(0,0,0,.72)");
+      text(message, GAME_W / 2, 639, 15, "#fff", "bold", "center");
+    }
+
+    if (state === "reveal") {
+      drawRevealOverlay();
+    }
+  }
+
+  function drawTimer(remain) {
+    const barX = 20;
+    const barY = 100;
+    const barW = 240;
+    const barH = 10;
+    const rate = Math.max(0, remain / TIME_LIMIT_SEC);
+
+    text(`残り ${remain}秒`, 20, 96, 14, remain <= 10 ? "#ff315f" : "#555", "bold", "left");
+
+    roundRect(ctx, barX, barY, barW, barH, 5, "#e5e5e5");
+
+    ctx.fillStyle = remain <= 10 ? "#ff315f" : "#5ab2ff";
+    roundRect(ctx, barX, barY, barW * rate, barH, 5, ctx.fillStyle);
+  }
+
+  function drawImagePanel(image, x, y, label) {
+    roundRect(ctx, x - 4, y - 4, PANEL_W + 8, PANEL_H + 8, 18, "#fff");
+    strokeRoundRect(ctx, x - 4, y - 4, PANEL_W + 8, PANEL_H + 8, 18, "#ffd1e0", 4);
+
+    text(label, x + 10, y - 10, 14, "#ff5d8f", "bold", "left");
+
+    ctx.save();
+    roundedPath(ctx, x, y, PANEL_W, PANEL_H, 14);
+    ctx.clip();
+
+    ctx.drawImage(image, x, y, PANEL_W, PANEL_H);
+
+    ctx.restore();
+  }
+
+  function drawAnswerMarks(stage, revealAll) {
+    const indexes = revealAll
+      ? stage.answers.map((_, i) => i)
+      : found;
+
+    for (const index of indexes) {
+      const answer = stage.answers[index];
+      drawAnswerCircle(answer, TOP_Y, "#ff315f", 5, revealAll ? index + 1 : null);
+      drawAnswerCircle(answer, BOTTOM_Y, "#ff315f", 5, revealAll ? index + 1 : null);
+    }
+  }
+
+  function drawDebugAnswers(stage) {
+    for (const answer of stage.answers) {
+      drawDebugCircle(answer, TOP_Y);
+      drawDebugCircle(answer, BOTTOM_Y);
+    }
+  }
+
+  function drawAnswerCircle(answer, panelY, color, lineWidth, number) {
+    const p = imageToScreenPoint(answer.x, answer.y, panelY);
+    const baseR = answer.r * PANEL_W / IMG_W;
+    const r = baseR + 8;
+
+    ctx.save();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+
+    if (number) {
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(p.x + r - 4, p.y - r + 4, 12, 0, Math.PI * 2);
+      ctx.fill();
+
+      text(String(number), p.x + r - 4, p.y - r + 9, 13, "#fff", "bold", "center");
+    }
+
+    ctx.restore();
+  }
+
+  function drawDebugCircle(answer, panelY) {
+    const p = imageToScreenPoint(answer.x, answer.y, panelY);
+    const r = (answer.r + TAP_MARGIN) * PANEL_W / IMG_W;
+
+    ctx.save();
+    ctx.fillStyle = "rgba(255,0,0,.12)";
+    ctx.strokeStyle = "rgba(255,0,0,.45)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawRevealOverlay() {
+    const title =
+      revealMode === "clear" ? "クリア！" :
+      revealMode === "giveup" ? "ギブアップ" :
+      "時間切れ！";
+
+    const sub =
+      revealMode === "clear" ? "よく見つけました！" :
+      "答えを表示しました";
+
+    ctx.fillStyle = "rgba(0,0,0,.58)";
+    ctx.fillRect(0, 0, GAME_W, GAME_H);
+
+    text(title, GAME_W / 2, 275, 38, "#fff", "bold", "center");
+    text(sub, GAME_W / 2, 315, 19, "#fff", "bold", "center");
+
+    if (revealMode !== "clear") {
+      text("赤い丸が答えです", GAME_W / 2, 345, 15, "#fff", "normal", "center");
+    } else {
+      const last = results[results.length - 1];
+      text(`タイム：${last.time}秒`, GAME_W / 2, 345, 17, "#fff", "bold", "center");
+    }
+
+    buttonNext.text = questionIndex === QUESTIONS_PER_GAME - 1 ? "結果を見る" : "つぎの問題へ";
+    drawButton(buttonNext, "#ff76a8", "#fff");
+  }
+
+  function drawResult() {
+    text("結果発表！", GAME_W / 2, 125, 36, "#ff5d8f", "bold", "center");
+
+    roundRect(ctx, 35, 190, 320, 360, 22, "#fff");
+    strokeRoundRect(ctx, 35, 190, 320, 360, 22, "#ffd1e0", 4);
+
+    let clearCount = 0;
+    let giveUpCount = 0;
+    let timeoutCount = 0;
+    let totalTime = 0;
+
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i];
+
+      if (r.status === "clear") clearCount++;
+      if (r.status === "giveup") giveUpCount++;
+      if (r.status === "timeout") timeoutCount++;
+
+      totalTime += r.time;
+
+      const statusText =
+        r.status === "clear" ? "クリア" :
+        r.status === "giveup" ? "ギブアップ" :
+        "時間切れ";
+
+      const statusColor =
+        r.status === "clear" ? "#ff5d8f" :
+        r.status === "giveup" ? "#777" :
+        "#5a8dff";
+
+      fitText(`${i + 1}. ${r.stageName}`, 62, 245 + i * 58, 16, 142, "#555", "bold", "left");
+      text(statusText, 254, 245 + i * 58, 15, statusColor, "bold", "center");
+      text(`${r.time}秒`, 330, 245 + i * 58, 14, "#555", "bold", "right");
+
+      text(`発見 ${r.foundCount}/3`, 62, 268 + i * 58, 13, "#888", "normal", "left");
+    }
+
+    text(`クリア数：${clearCount} / ${QUESTIONS_PER_GAME}`, GAME_W / 2, 425, 20, "#ff5d8f", "bold", "center");
+    text(`合計時間：${totalTime}秒`, GAME_W / 2, 458, 17, "#555", "bold", "center");
+    text(`ギブアップ ${giveUpCount}　時間切れ ${timeoutCount}`, GAME_W / 2, 488, 14, "#777", "normal", "center");
+    text(`ミス回数 ${missCount}`, GAME_W / 2, 515, 14, "#777", "normal", "center");
+
+    drawButton(buttonReplay, "#ff76a8", "#fff");
+  }
+
+  function drawButton(b, color, textColor) {
+    roundRect(ctx, b.x, b.y, b.w, b.h, 28, color);
+
+    ctx.fillStyle = "rgba(255,255,255,.25)";
+    ctx.beginPath();
+    ctx.ellipse(b.x + b.w / 2, b.y + 15, b.w * .36, 9, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    text(b.text, b.x + b.w / 2, b.y + 37, 20, textColor, "bold", "center");
+  }
+
+  function drawSmallButton(b) {
+    roundRect(ctx, b.x, b.y, b.w, b.h, 15, "#777");
+    text(b.text, b.x + b.w / 2, b.y + 20, 13, "#fff", "bold", "center");
+  }
+
+  /*
+    =========================
+    仮絵生成
+    =========================
+  */
+
+  function makeTempImage(stage, variant) {
+    const c = document.createElement("canvas");
+    c.width = IMG_W;
+    c.height = IMG_H;
+
+    const g = c.getContext("2d");
+
+    drawTempBackground(g, stage);
+    drawTempDistractors(g, stage);
+    drawTempMainProps(g, stage);
+
+    for (const answer of stage.answers) {
+      drawDifferenceObject(g, answer, variant);
+    }
+
+    drawTempFrame(g, stage);
+
+    return c;
+  }
+
+  function drawTempBackground(g, stage) {
+    const palettes = [
+      ["#c9f3ff", "#8fd96f"],
+      ["#171944", "#262b68"],
+      ["#dff3ff", "#777"],
+      ["#fff4d9", "#ffd79a"],
+      ["#bdefff", "#5bc5ff"],
+      ["#d8f7d2", "#63bd55"],
+      ["#f7f0df", "#c68b55"],
+      ["#25214d", "#3b2b68"],
+      ["#dff5ff", "#ffffff"],
+      ["#c8f2ff", "#7ed269"]
+    ];
+
+    const p = palettes[stage.theme];
+    const grad = g.createLinearGradient(0, 0, 0, IMG_H);
+    grad.addColorStop(0, p[0]);
+    grad.addColorStop(1, p[1]);
+
+    g.fillStyle = grad;
+    g.fillRect(0, 0, IMG_W, IMG_H);
+
+    const rand = seededRandom(stage.seed + 1);
+
+    if (stage.theme === 1 || stage.theme === 7) {
+      for (let i = 0; i < 90; i++) {
+        g.fillStyle = i % 4 === 0 ? "rgba(255,231,120,.85)" : "rgba(255,255,255,.8)";
+        circle(g, rand() * IMG_W, rand() * IMG_H, 1 + rand() * 3);
+      }
+    }
+
+    if (stage.theme === 4) {
+      g.fillStyle = "#fff3b0";
+      g.fillRect(0, 375, IMG_W, 65);
+    }
+  }
+
+  function drawTempDistractors(g, stage) {
+    const rand = seededRandom(stage.seed + 10);
+
+    for (let i = 0; i < 65; i++) {
+      const x = 35 + rand() * (IMG_W - 70);
+      const y = 45 + rand() * (IMG_H - 90);
+      const type = Math.floor(rand() * 6);
+
+      if (tooCloseToAnswers(stage, x, y, 55)) continue;
+
+      if (type === 0) drawTinyFlower(g, x, y, "#ffb6d1", "#ffd34d");
+      else if (type === 1) drawSmallTile(g, x, y, "#fff", "#8fd1ff", false);
+      else if (type === 2) drawSmallStar(g, x, y, 12, "#ffe66b");
+      else if (type === 3) drawTinyLeaf(g, x, y, "#3dae52");
+      else if (type === 4) drawTinyFace(g, x, y, "#fff5d6");
+      else drawTinyDots(g, x, y, "#ff5d8f");
+    }
+  }
+
+  function tooCloseToAnswers(stage, x, y, dist) {
+    for (const a of stage.answers) {
+      const dx = x - a.x;
+      const dy = y - a.y;
+      if (dx * dx + dy * dy < dist * dist) return true;
+    }
+    return false;
+  }
+
+  function drawTempMainProps(g, stage) {
+    const t = stage.theme;
+
+    if (t === 0) {
+      drawTree(g, 88, 165);
+      drawBench(g, 390, 250);
+      drawBalloon(g, 590, 310);
+    }
+
+    if (t === 1) {
+      drawPlanet(g, 120, 115);
+      drawRocket(g, 380, 190);
+      drawAlien(g, 570, 300);
+    }
+
+    if (t === 2) {
+      drawBuilding(g, 310, 130);
+      drawTrafficLight(g, 105, 190);
+      drawCar(g, 548, 315);
+    }
+
+    if (t === 3) {
+      drawCup(g, 142, 155);
+      drawDonut(g, 365, 285);
+      drawCat(g, 600, 222);
+    }
+
+    if (t === 4) {
+      drawFish(g, 155, 245);
+      drawBoat(g, 420, 125);
+      drawCrab(g, 585, 342);
+    }
+
+    if (t === 5) {
+      drawMushroom(g, 120, 315);
+      drawOwl(g, 355, 165);
+      drawBigLeaf(g, 586, 235);
+    }
+
+    if (t === 6) {
+      drawClock(g, 152, 108);
+      drawPencil(g, 376, 315, "#ffd34d");
+      drawBag(g, 588, 240, "#ffd34d");
+    }
+
+    if (t === 7) {
+      drawLantern(g, 120, 150, "#ff5d5d");
+      drawGoldfish(g, 378, 290, "#111");
+      drawFirework(g, 582, 95, 18);
+    }
+
+    if (t === 8) {
+      drawSnowman(g, 154, 175, "#ff5d8f");
+      drawPenguin(g, 398, 280, "#ffb13b");
+      drawSign(g, 582, 145, "right");
+    }
+
+    if (t === 9) {
+      drawCow(g, 142, 265, "#333");
+      drawAppleTree(g, 408, 125, "#3dae52");
+      drawScarecrow(g, 582, 235, "#8b5a2b");
+    }
+  }
+
+  function drawDifferenceObject(g, answer, variant) {
+    const x = answer.x;
+    const y = answer.y;
+
+    switch (answer.kind) {
+      case "flower":
+        drawTinyFlower(g, x, y, variant === 0 ? "#ffb6d1" : "#f6a6c0", "#ffd34d");
+        break;
+
+      case "tile":
+        drawSmallTile(g, x, y, "#fff", variant === 0 ? "#8fd1ff" : "#7cc2ef", variant === 1);
+        break;
+
+      case "dots":
+        drawTinyDots(g, x, y, variant === 0 ? "#ff5d8f" : "#ff7aa8");
+        break;
+
+      case "star":
+        drawSmallStar(g, x, y, variant === 0 ? 15 : 11, "#ffe66b");
+        break;
+
+      case "circleColor":
+        g.fillStyle = variant === 0 ? "#8fe8ff" : "#b7f0ff";
+        circle(g, x, y, 24);
+        break;
+
+      case "smallDot":
+        g.fillStyle = variant === 0 ? "#111" : "#fff";
+        circle(g, x, y, 10);
+        break;
+
+      case "light":
+        g.fillStyle = variant === 0 ? "#1c6b30" : "#38e46a";
+        circle(g, x, y, 20);
+        break;
+
+      case "window":
+        roundRect(g, x - 18, y - 20, 36, 40, 6, variant === 0 ? "#ffe678" : "#52607f");
+        break;
+
+      case "ellipseColor":
+        g.fillStyle = variant === 0 ? "#333" : "#fff";
+        g.beginPath();
+        g.ellipse(x, y, 34, 22, -.25, 0, Math.PI * 2);
+        g.fill();
+        break;
+
+      case "steam":
+        drawSteam(g, x, y, variant);
+        break;
+
+      case "donut":
+        g.fillStyle = variant === 0 ? "#fff4d9" : "#7a3f1d";
+        circle(g, x, y, 20);
+        break;
+
+      case "tail":
+        drawTail(g, x, y, variant);
+        break;
+
+      case "stripe":
+        g.fillStyle = variant === 0 ? "#fff" : "#3a7cff";
+        g.fillRect(x - 10, y - 30, 18, 60);
+        break;
+
+      case "flag":
+        g.fillStyle = variant === 0 ? "#ff5d8f" : "#ffd34d";
+        g.fillRect(x - 6, y - 28, 48, 30);
+        break;
+
+      case "line":
+        g.strokeStyle = variant === 0 ? "#4b2e18" : "#ffffff";
+        g.lineWidth = 8;
+        g.beginPath();
+        g.moveTo(x - 28, y);
+        g.lineTo(x + 28, y);
+        g.stroke();
+        break;
+
+      case "leaf":
+        g.fillStyle = variant === 0 ? "#2f9d48" : "#ffd34d";
+        g.beginPath();
+        g.ellipse(x, y, 28, 15, .35, 0, Math.PI * 2);
+        g.fill();
+        break;
+
+      case "hand":
+        g.strokeStyle = "#444";
+        g.lineWidth = 6;
+        g.beginPath();
+        g.moveTo(x, y);
+        if (variant === 0) g.lineTo(x + 34, y);
+        else g.lineTo(x + 24, y + 24);
+        g.stroke();
+        break;
+
+      case "pencil":
+        roundRect(g, x - 70, y - 14, 110, 28, 5, variant === 0 ? "#ffd34d" : "#5ab2ff");
+        break;
+
+      case "lantern":
+        g.fillStyle = variant === 0 ? "#ff5d5d" : "#5ab2ff";
+        g.beginPath();
+        g.ellipse(x, y, 28, 42, 0, 0, Math.PI * 2);
+        g.fill();
+        break;
+
+      case "spark":
+        drawFirework(g, x, y, variant === 0 ? 18 : 12);
+        break;
+
+      case "smallRect":
+        roundRect(g, x - 24, y - 8, 48, 16, 5, variant === 0 ? "#ff5d8f" : "#5ab2ff");
+        break;
+
+      case "arrow":
+        drawArrow(g, x, y, variant === 0 ? "right" : "left");
+        break;
+    }
+  }
+
+  function drawTempFrame(g, stage) {
+    g.save();
+
+    g.strokeStyle = "rgba(255,255,255,.7)";
+    g.lineWidth = 8;
+    roundedPath(g, 4, 4, IMG_W - 8, IMG_H - 8, 22);
+    g.stroke();
+
+    roundRect(g, 18, 18, 170, 38, 18, "rgba(255,255,255,.82)");
+
+    g.fillStyle = "#555";
+    g.font = "bold 22px sans-serif";
+    g.textAlign = "left";
+    g.fillText(stage.name, 34, 45);
+
+    g.restore();
+  }
+
+  /*
+    =========================
+    仮絵の部品
+    =========================
+  */
+
+  function drawTree(g, x, y) {
+    g.fillStyle = "#8b5a2b";
+    g.fillRect(x - 18, y + 20, 36, 110);
+
+    g.fillStyle = "#39a856";
+    circle(g, x, y, 70);
+    circle(g, x - 42, y + 28, 48);
+    circle(g, x + 44, y + 30, 50);
+  }
+
+  function drawBench(g, x, y) {
+    roundRect(g, x - 85, y - 20, 170, 45, 14, "#c77b35");
+    g.fillStyle = "#7a4a25";
+    g.fillRect(x - 70, y + 28, 16, 60);
+    g.fillRect(x + 54, y + 28, 16, 60);
+  }
+
+  function drawBalloon(g, x, y) {
+    g.strokeStyle = "#555";
+    g.lineWidth = 3;
+    g.beginPath();
+    g.moveTo(x, y + 22);
+    g.quadraticCurveTo(x - 20, y + 70, x, y + 110);
+    g.stroke();
+
+    g.fillStyle = "#ff5d8f";
+    g.beginPath();
+    g.ellipse(x, y, 28, 38, 0, 0, Math.PI * 2);
+    g.fill();
+  }
+
+  function drawPlanet(g, x, y) {
+    g.fillStyle = "#ffbd4a";
+    circle(g, x, y, 58);
+
+    g.strokeStyle = "#ffe99a";
+    g.lineWidth = 11;
+    g.beginPath();
+    g.ellipse(x, y, 88, 25, -.22, 0, Math.PI * 2);
+    g.stroke();
+  }
+
+  function drawRocket(g, x, y) {
+    g.save();
+    g.translate(x, y);
+    g.rotate(-.45);
+
+    roundRect(g, -35, -75, 70, 140, 35, "#f1f1f1");
+
+    g.fillStyle = "#ff5d6c";
+    polygon(g, [[-35, -42], [0, -108], [35, -42]]);
+
+    g.fillStyle = "#8fe8ff";
+    circle(g, 0, -12, 20);
+
+    g.fillStyle = "#ffcf4a";
+    polygon(g, [[-14, 65], [0, 120], [14, 65]]);
+
+    g.restore();
+  }
+
+  function drawAlien(g, x, y) {
+    g.fillStyle = "#7df07a";
+    g.beginPath();
+    g.ellipse(x, y, 55, 42, 0, 0, Math.PI * 2);
+    g.fill();
+
+    g.fillStyle = "#111";
+    circle(g, x - 20, y - 8, 8);
+    circle(g, x + 20, y - 8, 8);
+
+    g.fillStyle = "#645cff";
+    g.beginPath();
+    g.ellipse(x, y + 50, 80, 18, 0, 0, Math.PI * 2);
+    g.fill();
+  }
+
+  function drawBuilding(g, x, y) {
+    g.fillStyle = "#93a4c9";
+    g.fillRect(x - 65, y - 70, 130, 190);
+
+    for (let iy = 0; iy < 4; iy++) {
+      for (let ix = 0; ix < 3; ix++) {
+        roundRect(g, x - 45 + ix * 38, y - 45 + iy * 38, 24, 26, 5, "#ffe678");
+      }
+    }
+  }
+
+  function drawTrafficLight(g, x, y) {
+    roundRect(g, x - 26, y - 70, 52, 125, 14, "#333");
+    g.fillStyle = "#ff3d4d";
+    circle(g, x, y - 43, 14);
+    g.fillStyle = "#e6c93d";
+    circle(g, x, y - 5, 14);
+    g.fillStyle = "#1c6b30";
+    circle(g, x, y + 33, 14);
+  }
+
+  function drawCar(g, x, y) {
+    roundRect(g, x - 80, y - 30, 160, 55, 20, "#ffcc4d");
+    polygon(g, [[x - 40, y - 30], [x - 12, y - 72], [x + 45, y - 72], [x + 70, y - 30]], "#ffcc4d");
+
+    g.fillStyle = "#222";
+    circle(g, x - 48, y + 28, 22);
+    circle(g, x + 52, y + 28, 22);
+  }
+
+  function drawCup(g, x, y) {
+    roundRect(g, x - 42, y - 20, 84, 82, 18, "#9bd7ff");
+    g.fillStyle = "#fff";
+    circle(g, x, y + 22, 28);
+  }
+
+  function drawDonut(g, x, y) {
+    g.fillStyle = "#c9823a";
+    circle(g, x, y, 50);
+    g.fillStyle = "#ffb3c8";
+    circle(g, x, y, 38);
+    g.fillStyle = "#fff4d9";
+    circle(g, x, y, 17);
+  }
+
+  function drawCat(g, x, y) {
+    g.fillStyle = "#f2a24b";
+    circle(g, x, y - 42, 30);
+    roundRect(g, x - 32, y - 15, 64, 72, 22, "#f2a24b");
+
+    polygon(g, [[x - 22, y - 60], [x - 8, y - 92], [x + 2, y - 58]], "#f2a24b");
+    polygon(g, [[x + 22, y - 60], [x + 8, y - 92], [x - 2, y - 58]], "#f2a24b");
+
+    g.fillStyle = "#111";
+    circle(g, x - 11, y - 46, 5);
+    circle(g, x + 11, y - 46, 5);
+  }
+
+  function drawFish(g, x, y) {
+    g.fillStyle = "#ffb13b";
+    g.beginPath();
+    g.ellipse(x, y, 58, 36, 0, 0, Math.PI * 2);
+    g.fill();
+    polygon(g, [[x - 58, y], [x - 95, y - 30], [x - 95, y + 30]], "#ffb13b");
+    g.fillStyle = "#111";
+    circle(g, x + 26, y - 9, 6);
+  }
+
+  function drawBoat(g, x, y) {
+    polygon(g, [[x - 80, y + 45], [x + 82, y + 45], [x + 55, y + 82], [x - 58, y + 82]], "#fff");
+    g.fillStyle = "#8b5a2b";
+    g.fillRect(x - 4, y - 58, 8, 100);
+    polygon(g, [[x + 8, y - 52], [x + 8, y + 32], [x + 78, y + 32]], "#fff8c7");
+  }
+
+  function drawCrab(g, x, y) {
+    g.fillStyle = "#ff6b3a";
+    g.beginPath();
+    g.ellipse(x, y, 45, 28, 0, 0, Math.PI * 2);
+    g.fill();
+
+    g.fillStyle = "#111";
+    circle(g, x - 13, y - 8, 5);
+    circle(g, x + 13, y - 8, 5);
+  }
+
+  function drawMushroom(g, x, y) {
+    g.fillStyle = "#ef4f4f";
+    g.beginPath();
+    g.arc(x, y - 10, 45, Math.PI, 0);
+    g.closePath();
+    g.fill();
+
+    roundRect(g, x - 28, y - 10, 56, 64, 14, "#fff7dd");
+  }
+
+  function drawOwl(g, x, y) {
+    g.fillStyle = "#9a6a3a";
+    g.beginPath();
+    g.ellipse(x, y, 52, 64, 0, 0, Math.PI * 2);
+    g.fill();
+
+    g.fillStyle = "#fff";
+    circle(g, x - 18, y - 10, 18);
+    circle(g, x + 18, y - 10, 18);
+
+    g.fillStyle = "#111";
+    circle(g, x - 18, y - 10, 7);
+    circle(g, x + 18, y - 10, 7);
+  }
+
+  function drawBigLeaf(g, x, y) {
+    g.fillStyle = "#2f9d48";
+    g.beginPath();
+    g.ellipse(x, y, 46, 24, .35, 0, Math.PI * 2);
+    g.fill();
+  }
+
+  function drawClock(g, x, y) {
+    g.fillStyle = "#fff";
+    circle(g, x, y, 42);
+    g.strokeStyle = "#444";
+    g.lineWidth = 6;
+    g.beginPath();
+    g.arc(x, y, 42, 0, Math.PI * 2);
+    g.stroke();
+
+    g.strokeStyle = "#444";
+    g.lineWidth = 5;
+    g.beginPath();
+    g.moveTo(x, y);
+    g.lineTo(x, y - 26);
+    g.lineTo(x + 28, y);
+    g.stroke();
+  }
+
+  function drawPencil(g, x, y, color) {
+    roundRect(g, x - 70, y - 14, 110, 28, 5, color);
+    polygon(g, [[x + 40, y - 14], [x + 75, y], [x + 40, y + 14]], "#ffcf9d");
+    polygon(g, [[x + 66, y - 6], [x + 75, y], [x + 66, y + 6]], "#333");
+  }
+
+  function drawBag(g, x, y, starColor) {
+    roundRect(g, x - 42, y - 48, 84, 96, 18, "#7a5cff");
+    drawSmallStar(g, x, y, 16, starColor);
+  }
+
+  function drawLantern(g, x, y, color) {
+    g.fillStyle = color;
+    g.beginPath();
+    g.ellipse(x, y, 28, 42, 0, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = "#333";
+    g.fillRect(x - 18, y - 52, 36, 9);
+    g.fillRect(x - 18, y + 43, 36, 9);
+  }
+
+  function drawGoldfish(g, x, y, eyeColor) {
+    g.fillStyle = "rgba(170,230,255,.75)";
+    g.beginPath();
+    g.ellipse(x, y, 70, 42, 0, 0, Math.PI * 2);
+    g.fill();
+
+    g.fillStyle = "#ff8a2a";
+    g.beginPath();
+    g.ellipse(x, y, 38, 22, 0, 0, Math.PI * 2);
+    g.fill();
+
+    g.fillStyle = eyeColor;
+    circle(g, x + 16, y - 7, 6);
+  }
+
+  function drawFirework(g, x, y, size) {
+    g.strokeStyle = "#ffdf61";
+    g.lineWidth = 5;
+    for (let i = 0; i < 12; i++) {
+      const a = i * Math.PI * 2 / 12;
+      g.beginPath();
+      g.moveTo(x, y);
+      g.lineTo(x + Math.cos(a) * size * 2, y + Math.sin(a) * size * 2);
+      g.stroke();
+    }
+  }
+
+  function drawSnowman(g, x, y, band) {
+    g.fillStyle = "#fff";
+    circle(g, x, y - 42, 38);
+    circle(g, x, y + 28, 55);
+
+    g.fillStyle = "#222";
+    g.fillRect(x - 38, y - 105, 76, 22);
+    g.fillRect(x - 26, y - 154, 52, 52);
+
+    g.fillStyle = band;
+    g.fillRect(x - 28, y - 132, 56, 12);
+  }
+
+  function drawPenguin(g, x, y, beakColor) {
+    g.fillStyle = "#222";
+    g.beginPath();
+    g.ellipse(x, y, 42, 68, 0, 0, Math.PI * 2);
+    g.fill();
+
+    g.fillStyle = "#fff";
+    g.beginPath();
+    g.ellipse(x, y + 12, 28, 42, 0, 0, Math.PI * 2);
+    g.fill();
+
+    g.fillStyle = beakColor;
+    g.fillRect(x - 10, y - 18, 28, 14);
+  }
+
+  function drawSign(g, x, y, dir) {
+    g.fillStyle = "#8b5a2b";
+    g.fillRect(x - 5, y + 24, 10, 130);
+
+    roundRect(g, x - 58, y - 24, 116, 52, 12, "#fff");
+    g.strokeStyle = "#5ab2ff";
+    g.lineWidth = 5;
+    roundedPath(g, x - 58, y - 24, 116, 52, 12);
+    g.stroke();
+
+    drawArrow(g, x, y, dir);
+  }
+
+  function drawCow(g, x, y, spotColor) {
+    roundRect(g, x - 90, y - 35, 150, 70, 30, "#fff");
+    circle(g, x + 70, y - 32, 38);
+
+    g.fillStyle = spotColor;
+    g.beginPath();
+    g.ellipse(x - 35, y - 6, 34, 22, -.3, 0, Math.PI * 2);
+    g.fill();
+
+    g.fillStyle = "#111";
+    circle(g, x + 82, y - 44, 5);
+  }
+
+  function drawAppleTree(g, x, y, leafColor) {
+    g.fillStyle = "#8b5a2b";
+    g.fillRect(x - 12, y + 44, 24, 130);
+
+    g.fillStyle = "#3dae52";
+    circle(g, x, y, 70);
+    circle(g, x - 40, y + 26, 45);
+    circle(g, x + 40, y + 30, 45);
+
+    g.fillStyle = "#ff4f62";
+    circle(g, x - 22, y - 8, 12);
+    circle(g, x + 28, y + 14, 12);
+
+    g.fillStyle = leafColor;
+    g.beginPath();
+    g.ellipse(x - 5, y - 28, 18, 10, -.4, 0, Math.PI * 2);
+    g.fill();
+  }
+
+  function drawScarecrow(g, x, y, hatColor) {
+    g.strokeStyle = "#8b5a2b";
+    g.lineWidth = 10;
+    g.beginPath();
+    g.moveTo(x - 70, y + 30);
+    g.lineTo(x + 70, y + 30);
+    g.moveTo(x, y);
+    g.lineTo(x, y + 130);
+    g.stroke();
+
+    g.fillStyle = "#ffd0a6";
+    circle(g, x, y, 32);
+
+    g.fillStyle = hatColor;
+    g.fillRect(x - 38, y - 55, 76, 14);
+    polygon(g, [[x - 24, y - 55], [x, y - 95], [x + 24, y - 55]], hatColor);
+  }
+
+  function drawTinyFlower(g, x, y, petalColor, centerColor) {
+    g.fillStyle = petalColor;
+    for (let i = 0; i < 6; i++) {
+      const a = i * Math.PI / 3;
+      circle(g, x + Math.cos(a) * 12, y + Math.sin(a) * 12, 8);
+    }
+    g.fillStyle = centerColor;
+    circle(g, x, y, 7);
+  }
+
+  function drawSmallTile(g, x, y, base, lineColor, missingLine) {
+    roundRect(g, x - 30, y - 22, 60, 44, 8, base);
+    g.strokeStyle = lineColor;
+    g.lineWidth = 5;
+    g.beginPath();
+    g.moveTo(x - 20, y - 8);
+    g.lineTo(x + 20, y - 8);
+    if (!missingLine) {
+      g.moveTo(x - 20, y + 8);
+      g.lineTo(x + 20, y + 8);
+    } else {
+      g.moveTo(x - 8, y + 8);
+      g.lineTo(x + 20, y + 8);
+    }
+    g.stroke();
+  }
+
+  function drawTinyDots(g, x, y, color) {
+    g.fillStyle = color;
+    circle(g, x - 10, y - 5, 5);
+    circle(g, x + 8, y - 7, 5);
+    circle(g, x, y + 8, 5);
+    circle(g, x + 14, y + 9, 4);
+  }
+
+  function drawSmallStar(g, x, y, r, color) {
+    g.fillStyle = color;
+    g.beginPath();
+
+    for (let i = 0; i < 10; i++) {
+      const a = -Math.PI / 2 + i * Math.PI / 5;
+      const rr = i % 2 === 0 ? r : r * .45;
+      const px = x + Math.cos(a) * rr;
+      const py = y + Math.sin(a) * rr;
+
+      if (i === 0) g.moveTo(px, py);
+      else g.lineTo(px, py);
+    }
+
+    g.closePath();
+    g.fill();
+  }
+
+  function drawTinyLeaf(g, x, y, color) {
+    g.fillStyle = color;
+    g.beginPath();
+    g.ellipse(x, y, 20, 11, .4, 0, Math.PI * 2);
+    g.fill();
+
+    g.strokeStyle = "rgba(255,255,255,.55)";
+    g.lineWidth = 2;
+    g.beginPath();
+    g.moveTo(x - 13, y);
+    g.lineTo(x + 13, y);
+    g.stroke();
+  }
+
+  function drawTinyFace(g, x, y, color) {
+    g.fillStyle = color;
+    circle(g, x, y, 22);
+
+    g.fillStyle = "#111";
+    circle(g, x - 8, y - 4, 3);
+    circle(g, x + 8, y - 4, 3);
+
+    g.strokeStyle = "#111";
+    g.lineWidth = 2;
+    g.beginPath();
+    g.arc(x, y + 3, 9, 0, Math.PI);
+    g.stroke();
+  }
+
+  function drawSteam(g, x, y, variant) {
+    g.strokeStyle = variant === 0 ? "#a08060" : "#d8b28a";
+    g.lineWidth = 5;
+    g.beginPath();
+    g.moveTo(x - 10, y + 20);
+    g.quadraticCurveTo(x - 30, y - 10, x - 4, y - 32);
+    g.moveTo(x + 10, y + 20);
+    if (variant === 0) {
+      g.quadraticCurveTo(x + 30, y - 10, x + 4, y - 32);
+    } else {
+      g.quadraticCurveTo(x + 20, y - 4, x + 18, y - 26);
+    }
+    g.stroke();
+  }
+
+  function drawTail(g, x, y, variant) {
+    g.strokeStyle = "#f2a24b";
+    g.lineWidth = 12;
+    g.beginPath();
+    if (variant === 0) {
+      g.moveTo(x - 8, y + 12);
+      g.quadraticCurveTo(x + 35, y - 30, x + 5, y - 70);
+    } else {
+      g.moveTo(x - 8, y + 12);
+      g.quadraticCurveTo(x + 38, y + 35, x + 2, y + 58);
+    }
+    g.stroke();
+  }
+
+  function drawArrow(g, x, y, dir) {
+    g.fillStyle = "#5ab2ff";
+
+    if (dir === "right") {
+      polygon(g, [
+        [x - 25, y - 10],
+        [x + 18, y - 10],
+        [x + 18, y - 23],
+        [x + 48, y],
+        [x + 18, y + 23],
+        [x + 18, y + 10],
+        [x - 25, y + 10]
+      ]);
+    } else {
+      polygon(g, [
+        [x + 25, y - 10],
+        [x - 18, y - 10],
+        [x - 18, y - 23],
+        [x - 48, y],
+        [x - 18, y + 23],
+        [x - 18, y + 10],
+        [x + 25, y + 10]
+      ]);
+    }
+  }
+
+  /*
+    =========================
+    共通関数
+    =========================
+  */
+
+  function text(t, x, y, size, color, weight = "normal", align = "center") {
+    ctx.fillStyle = color;
+    ctx.font = `${weight} ${size}px sans-serif`;
+    ctx.textAlign = align;
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(t, x, y);
+  }
+
+  function fitText(t, x, y, size, maxWidth, color, weight = "normal", align = "left") {
+    let fittedSize = size;
+
+    ctx.font = `${weight} ${fittedSize}px sans-serif`;
+    while (fittedSize > 11 && ctx.measureText(t).width > maxWidth) {
+      fittedSize--;
+      ctx.font = `${weight} ${fittedSize}px sans-serif`;
+    }
+
+    text(t, x, y, fittedSize, color, weight, align);
+  }
+
+  function circle(g, x, y, r) {
+    g.beginPath();
+    g.arc(x, y, r, 0, Math.PI * 2);
+    g.fill();
+  }
+
+  function polygon(g, points, color) {
+    if (color) g.fillStyle = color;
+
+    g.beginPath();
+    g.moveTo(points[0][0], points[0][1]);
+
+    for (let i = 1; i < points.length; i++) {
+      g.lineTo(points[i][0], points[i][1]);
+    }
+
+    g.closePath();
+    g.fill();
+  }
+
+  function roundRect(g, x, y, w, h, r, color) {
+    if (color) g.fillStyle = color;
+    roundedPath(g, x, y, w, h, r);
+    g.fill();
+  }
+
+  function strokeRoundRect(g, x, y, w, h, r, color, lineWidth) {
+    g.save();
+    g.strokeStyle = color;
+    g.lineWidth = lineWidth;
+    roundedPath(g, x, y, w, h, r);
+    g.stroke();
+    g.restore();
+  }
+
+  function roundedPath(g, x, y, w, h, r) {
+    const rr = Math.min(r, w / 2, h / 2);
+
+    g.beginPath();
+    g.moveTo(x + rr, y);
+    g.lineTo(x + w - rr, y);
+    g.quadraticCurveTo(x + w, y, x + w, y + rr);
+    g.lineTo(x + w, y + h - rr);
+    g.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+    g.lineTo(x + rr, y + h);
+    g.quadraticCurveTo(x, y + h, x, y + h - rr);
+    g.lineTo(x, y + rr);
+    g.quadraticCurveTo(x, y, x + rr, y);
+    g.closePath();
+  }
+
+  function shuffle(array) {
+    const a = array.slice();
+
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+
+    return a;
+  }
+
+  function seededRandom(seed) {
+    let a = seed >>> 0;
+
+    return function() {
+      a += 0x6D2B79F5;
+      let t = a;
+      t = Math.imul(t ^ t >>> 15, t | 1);
+      t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+  }
+
+  function beep(freq, duration) {
+    try {
+      const AudioContext = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContext) return;
+
+      if (!window.__audioContext) {
+        window.__audioContext = new AudioContext();
+      }
+
+      const ac = window.__audioContext;
+
+      if (ac.state === "suspended") {
+        ac.resume();
+      }
+
+      const osc = ac.createOscillator();
+      const gain = ac.createGain();
+
+      osc.frequency.value = freq;
+      osc.type = "sine";
+      gain.gain.value = 0.055;
+
+      osc.connect(gain);
+      gain.connect(ac.destination);
+
+      osc.start();
+      osc.stop(ac.currentTime + duration);
+    } catch (e) {}
+  }
+
+})();
+</script>
+</body>
+</html>
